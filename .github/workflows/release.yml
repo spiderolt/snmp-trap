@@ -1,0 +1,194 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão imutável (vX.Y ou vX.Y.Z)"
+        required: true
+        default: "v1.0.0"
+        type: string
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    name: Test release candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test agent
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest -q
+
+  validate-version:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate immutable version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
+            echo "Releases must be dispatched from the main branch." >&2
+            exit 1
+          }
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$ ]] || {
+            echo "Invalid version (expected vX.Y or vX.Y.Z): $VERSION" >&2
+            exit 1
+          }
+
+          git fetch --tags --force
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            tag_commit="$(git rev-list -n 1 "$VERSION")"
+            [[ "$tag_commit" == "$GITHUB_SHA" ]] || {
+              echo "Version already exists on another commit: $VERSION" >&2
+              exit 1
+            }
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "Release already published: $VERSION" >&2
+              exit 1
+            fi
+            echo "Tag $VERSION exists for this commit without a release; continuing."
+          fi
+
+          echo "Next release: $VERSION"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build-image:
+    name: Build snmp-trap image
+    needs: [quality-gate, validate-version]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image coordinates
+        id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "name=ghcr.io/${owner}/snmp-trap" >> "$GITHUB_OUTPUT"
+          echo "version=${{ needs.validate-version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.validate-version.outputs.version }}
+          cache-from: type=gha,scope=snmp-trap
+          cache-to: type=gha,mode=max,scope=snmp-trap
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [validate-version, build-image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Stamp install script
+        env:
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          IMAGE: ${{ needs.build-image.outputs.image }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          sed "s/__SNMP_TRAP_VERSION__/${VERSION}/" install.sh > dist/install.sh
+          chmod +x dist/install.sh
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          IMAGE: ${{ needs.build-image.outputs.image }}
+        shell: bash
+        run: |
+          git fetch --tags --force
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            tag_commit="$(git rev-list -n 1 "$VERSION")"
+            [[ "$tag_commit" == "$GITHUB_SHA" ]] || {
+              echo "Tag $VERSION already points to another commit." >&2
+              exit 1
+            }
+          else
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            git tag -a "$VERSION" "$GITHUB_SHA" -m "snmp-trap $VERSION"
+            git push origin "$VERSION"
+          fi
+
+          attempt=1
+          max_attempts=4
+          until gh release create "$VERSION" \
+            dist/install.sh \
+            --verify-tag \
+            --title "snmp-trap $VERSION" \
+            --notes "Imagem ${IMAGE}:${VERSION}"
+          do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Failed to publish $VERSION after $max_attempts attempts." >&2
+              exit 1
+            fi
+            echo "GitHub release API failed (attempt $attempt); retrying." >&2
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+          done
+
+      - name: Make container package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          gh api --method PUT -H "Accept: application/vnd.github+json" \
+            "/orgs/${owner}/packages/container/snmp-trap/visibility" \
+            -f visibility=public \
+            || gh api --method PUT -H "Accept: application/vnd.github+json" \
+            "/user/packages/container/snmp-trap/visibility" \
+            -f visibility=public \
+            || echo "Package visibility was not changed. Mark snmp-trap public in GitHub Packages."

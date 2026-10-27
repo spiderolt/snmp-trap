@@ -1,0 +1,16 @@
+{
+  "name": "huawei_onu_online",
+  "source_ip": "10.10.1.8",
+  "community": "public",
+  "expected": {
+    "event_type": "onu_online",
+    "reason": "n/a",
+    "pon_index": "4194312192",
+    "onu_index": 7
+  },
+  "varbinds": [
+    {"oid": "1.3.6.1.2.1.1.3.0", "value": "345678"},
+    {"oid": "1.3.6.1.6.3.1.1.4.1.0", "value": "1.3.6.1.4.1.2011.6.128.2.1.9"},
+    {"oid": "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194312192.7", "value": "1"}
+  ]
+}

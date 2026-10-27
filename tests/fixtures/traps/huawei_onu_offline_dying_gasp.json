@@ -1,0 +1,17 @@
+{
+  "name": "huawei_onu_offline_dying_gasp",
+  "source_ip": "10.10.1.8",
+  "community": "public",
+  "expected": {
+    "event_type": "onu_offline",
+    "reason": "pwr fail",
+    "pon_index": "4194312192",
+    "onu_index": 12
+  },
+  "varbinds": [
+    {"oid": "1.3.6.1.2.1.1.3.0", "value": "234567"},
+    {"oid": "1.3.6.1.6.3.1.1.4.1.0", "value": "1.3.6.1.4.1.2011.6.128.2.1.6"},
+    {"oid": "1.3.6.1.4.1.2011.6.128.1.1.2.43.1.1", "value": "4194312192"},
+    {"oid": "1.3.6.1.4.1.2011.6.128.1.1.2.43.1.2", "value": "12"}
+  ]
+}
