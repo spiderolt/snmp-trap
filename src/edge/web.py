@@ -267,7 +267,7 @@ def render(listener: TrapListener, *, message: str = "") -> str:
         <small>Agente de traps</small>
       </div>
     </header>
-    <p class="lead">A porta UDP padrão é {DEFAULT_PORT}. O Zabbix continua na 162.</p>
+    <p class="lead">A porta UDP padrão é {DEFAULT_PORT}.</p>
     <dl class="stats">
       <div><dt>Escutando</dt><dd>{escape(str(listening))}</dd></div>
       <div><dt>Recebidos</dt><dd>{stats.received}</dd></div>
