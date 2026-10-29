@@ -63,6 +63,9 @@ EOF
 
 docker compose --project-directory "${DEST}" pull
 docker compose --project-directory "${DEST}" up -d
+if ! docker image prune -af; then
+  echo "limpeza de imagens antigas falhou" >&2
+fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 IP="${IP:-o IP deste servidor}"
