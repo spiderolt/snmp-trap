@@ -19,6 +19,7 @@ def publish_event(url: str, token: str, payload: dict[str, object], *, timeout: 
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "SpiderOLT-snmp-trap/1.0",
         },
     )
     try:

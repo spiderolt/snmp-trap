@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import threading
 
-from edge.config import allowlist_cidrs, http_port, load_config, save_config
-from edge.listener import TrapListener, allowlist_from_csv
+from edge.config import http_port, load_config, save_config
+from edge.listener import TrapListener
 from edge.web import serve_http
+from trap_receiver.security import Allowlist
 
 
 def main() -> None:
     config = load_config()
     save_config(config)
-    listener = TrapListener(allowlist=allowlist_from_csv(allowlist_cidrs()))
+    listener = TrapListener(allowlist=Allowlist())
     listener.set_config(config)
     try:
         listener.bind(config.trap_port)

@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from edge.config import DEFAULT_PORT, EdgeConfig, save_config
+from edge.config import DEFAULT_PORT, EdgeConfig, normalize_allowlist, save_config
 from edge.listener import TrapListener
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -121,10 +121,10 @@ label {
   font-size: 0.8125rem;
   font-weight: 500;
 }
-input {
+input, textarea {
   width: 100%;
   min-height: 44px;
-  padding: 0 0.75rem;
+  padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elevated);
@@ -132,8 +132,13 @@ input {
   font: inherit;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
-input:hover { border-color: var(--border-strong); }
-input:focus {
+textarea {
+  min-height: 7.5rem;
+  resize: vertical;
+  line-height: 1.45;
+}
+input:hover, textarea:hover { border-color: var(--border-strong); }
+input:focus, textarea:focus {
   border-color: var(--focus);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
   outline: none;
@@ -205,10 +210,18 @@ def make_handler(listener: TrapListener):
             if not 1 <= port <= 65535:
                 message = "A porta precisa estar entre 1 e 65535."
                 port = current.trap_port
+            allowlist_raw = (form.get("allowlist") or [current.allowlist])[0]
+            try:
+                allowlist = normalize_allowlist(allowlist_raw)
+            except ValueError as exc:
+                allowlist = current.allowlist
+                if message == "":
+                    message = str(exc)
             proposed = EdgeConfig(
                 trap_port=port,
                 api_host=(form.get("api_host") or [""])[0].strip(),
                 token=(form.get("token") or [""])[0].strip(),
+                allowlist=allowlist,
             )
             if message == "" and proposed.trap_port != listener.stats.listening_port:
                 try:
@@ -284,6 +297,10 @@ def render(listener: TrapListener, *, message: str = "") -> str:
       <label>Token
         <input name="token" type="password" autocomplete="off" value="{escape(config.token)}">
       </label>
+      <label>Redes de origem
+        <textarea name="allowlist" rows="5" spellcheck="false" autocomplete="off">{escape(config.allowlist)}</textarea>
+      </label>
+      <p class="hint">Um IP ou prefixo por linha. O aviso de origem mostra o IP que falta.</p>
       <button type="submit">Salvar</button>
     </form>
   </main>

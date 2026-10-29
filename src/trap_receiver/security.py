@@ -55,3 +55,24 @@ def parse_csv(raw: str | None) -> list[str]:
     if not raw:
         return []
     return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def parse_allowlist(raw: str | None) -> list[str]:
+    seen: list[str] = []
+    known: set[str] = set()
+    for line in str(raw or "").replace(",", "\n").splitlines():
+        item = line.strip()
+        if item == "" or item.startswith("#"):
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"Rede inválida: {item}.") from None
+        rendered = str(network)
+        if rendered in known:
+            continue
+        known.add(rendered)
+        seen.append(rendered)
+    if not seen:
+        raise ValueError("Informe ao menos uma rede ou IP.")
+    return seen

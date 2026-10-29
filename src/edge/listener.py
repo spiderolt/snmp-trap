@@ -11,7 +11,7 @@ from edge.url import ingest_url
 from trap_receiver.adapters.registry import default_registry
 from trap_receiver.contract import isoformat
 from trap_receiver.decoder import TrapDecodeError, decode_snmp_trap
-from trap_receiver.security import Allowlist, SlidingWindowRateLimiter, parse_csv
+from trap_receiver.security import Allowlist, SlidingWindowRateLimiter, parse_allowlist, parse_csv
 
 
 class EdgeStats:
@@ -36,8 +36,10 @@ class TrapListener:
         self.config = EdgeConfig()
 
     def set_config(self, config: EdgeConfig) -> None:
+        allowlist = Allowlist(parse_allowlist(config.allowlist))
         with self._config_lock:
             self.config = config
+            self.allowlist = allowlist
 
     def current_config(self) -> EdgeConfig:
         with self._config_lock:
@@ -45,6 +47,7 @@ class TrapListener:
                 trap_port=self.config.trap_port,
                 api_host=self.config.api_host,
                 token=self.config.token,
+                allowlist=self.config.allowlist,
             )
 
     def bind(self, port: int) -> None:
