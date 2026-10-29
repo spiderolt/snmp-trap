@@ -281,7 +281,6 @@ def render(listener: TrapListener, *, message: str = "") -> str:
       <label>Endereço da API
         <input name="api_host" type="text" placeholder="site.spiderolt.com" autocomplete="off" value="{escape(config.api_host)}">
       </label>
-      <p class="hint">O caminho /api/snmp-trap/traps é acrescentado ao endereço. Um caminho colado aqui é ignorado.</p>
       <label>Token
         <input name="token" type="password" autocomplete="off" value="{escape(config.token)}">
       </label>
