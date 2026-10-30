@@ -1,3 +1,5 @@
+name: snmp-trap
+
 services:
   snmp-trap:
     image: ${SNMP_TRAP_IMAGE:?SNMP_TRAP_IMAGE is required}
@@ -8,7 +10,4 @@ services:
       SNMP_TRAP_HTTP_PORT: "8088"
       TRAP_ALLOWLIST_CIDRS: ${TRAP_ALLOWLIST_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
-      - snmp-trap-config:/var/lib/snmp-trap
-
-volumes:
-  snmp-trap-config:
+      - ./data:/var/lib/snmp-trap

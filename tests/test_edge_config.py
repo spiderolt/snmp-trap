@@ -64,6 +64,26 @@ def test_saved_allowlist_filters_the_next_trap(tmp_path, monkeypatch: pytest.Mon
     assert not listener.allowlist.allows("198.51.100.10")
 
 
+def test_blank_credentials_keep_the_saved_ones(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "config.json"
+    monkeypatch.setenv("SNMP_TRAP_CONFIG_PATH", str(target))
+    save_config(EdgeConfig(trap_port=1162, api_host="site.spiderolt.com", token="edge_abc"))
+    loaded = save_config(EdgeConfig(trap_port=162, api_host="", token=""))
+    assert loaded.api_host == "site.spiderolt.com"
+    assert loaded.token == "edge_abc"
+    assert loaded.trap_port == 162
+    assert load_config().token == "edge_abc"
+
+
+def test_new_credentials_replace_the_saved_ones(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "config.json"
+    monkeypatch.setenv("SNMP_TRAP_CONFIG_PATH", str(target))
+    save_config(EdgeConfig(api_host="site.spiderolt.com", token="edge_abc"))
+    loaded = save_config(EdgeConfig(api_host="outro.spiderolt.com", token="edge_new"))
+    assert loaded.api_host == "outro.spiderolt.com"
+    assert loaded.token == "edge_new"
+
+
 def test_invalid_port_falls_back(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "config.json"
     target.write_text('{"trap_port": 0, "api_host": "", "token": ""}', encoding="utf-8")

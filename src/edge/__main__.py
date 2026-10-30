@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from edge.config import http_port, load_config, save_config
+from edge.config import config_path, http_port, load_config, save_config
 from edge.listener import TrapListener
 from edge.web import serve_http
 from trap_receiver.security import Allowlist
@@ -10,7 +10,8 @@ from trap_receiver.security import Allowlist
 
 def main() -> None:
     config = load_config()
-    save_config(config)
+    if not config_path().exists():
+        config = save_config(config)
     listener = TrapListener(allowlist=Allowlist())
     listener.set_config(config)
     try:

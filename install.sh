@@ -38,9 +38,12 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${DEST}"
+STATE_DIR="/var/lib/snmp-trap"
+mkdir -p "${DEST}" "${STATE_DIR}"
 
 cat > "${DEST}/docker-compose.yml" <<EOF
+name: snmp-trap
+
 services:
   snmp-trap:
     image: \${SNMP_TRAP_IMAGE}
@@ -51,17 +54,56 @@ services:
       SNMP_TRAP_HTTP_PORT: "${HTTP_PORT}"
       TRAP_ALLOWLIST_CIDRS: \${TRAP_ALLOWLIST_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
-      - snmp-trap-config:/var/lib/snmp-trap
-
-volumes:
-  snmp-trap-config:
+      - /var/lib/snmp-trap:/var/lib/snmp-trap
 EOF
 
 cat > "${DEST}/.env" <<EOF
 SNMP_TRAP_IMAGE=${IMAGE}
 EOF
 
+host_has_credentials() {
+  [[ -f "${STATE_DIR}/config.json" ]] || return 1
+  grep -Eq '"(api_host|token)"[[:space:]]*:[[:space:]]*"[^"]+' "${STATE_DIR}/config.json"
+}
+
+copy_config_from_volume() {
+  local volume="$1"
+  docker volume inspect "${volume}" >/dev/null 2>&1 || return 1
+  docker run --rm --entrypoint python \
+    -v "${volume}:/old:ro" \
+    -v "${STATE_DIR}:/state" \
+    "${IMAGE}" \
+    -c 'import json
+from pathlib import Path
+src = Path("/old/config.json")
+if not src.is_file():
+    raise SystemExit(1)
+raw = json.loads(src.read_text(encoding="utf-8"))
+if not str(raw.get("api_host") or "").strip() and not str(raw.get("token") or "").strip():
+    raise SystemExit(1)
+Path("/state/config.json").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+'
+}
+
 docker compose --project-directory "${DEST}" pull
+if ! host_has_credentials; then
+  docker compose --project-directory "${DEST}" stop || true
+  volumes="$(docker volume ls -q --filter label=com.docker.compose.volume=snmp-trap-config || true)"
+  if [[ -z "${volumes}" ]]; then
+    volumes=$'snmp-trap_snmp-trap-config\nsnmp-trap-config'
+  fi
+  while IFS= read -r volume; do
+    [[ -n "${volume}" ]] || continue
+    if copy_config_from_volume "${volume}"; then
+      break
+    fi
+  done <<< "${volumes}"
+fi
+chmod 700 "${STATE_DIR}"
+if [[ -f "${STATE_DIR}/config.json" ]]; then
+  chmod 600 "${STATE_DIR}/config.json"
+fi
+
 docker compose --project-directory "${DEST}" up -d
 if ! docker image prune -af; then
   echo "limpeza de imagens antigas falhou" >&2
@@ -77,6 +119,7 @@ Imagem: ${IMAGE}
 Tela: http://${IP}:${HTTP_PORT}
 
 Informe o endereço da API, por exemplo site.spiderolt.com, e o token gerado no SpiderOLT.
+Os dois ficam em /var/lib/snmp-trap/config.json e continuam neste servidor quando o agente reinicia ou atualiza.
 A porta UDP já vem em ${TRAP_PORT}. Se mudar na tela, use a nova porta no comando da OLT.
 
 Na OLT, em config, sem apagar os destinos que já existem:

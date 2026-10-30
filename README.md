@@ -18,4 +18,4 @@ No servidor Linux da rede de gerência, use o script do release mais recente:
 curl -fsSL https://github.com/spiderolt/snmp-trap/releases/latest/download/install.sh | sudo bash
 ```
 
-Esse script instala o Docker se ele não existir e sobe a imagem daquele release. O repositório pode ficar público: a leitura e o download do release não exigem conta. O pacote da imagem no GHCR também precisa estar público, senão o `docker pull` pede login.
+Esse script instala o Docker se ele não existir e sobe a imagem daquele release. O endereço da API e o token ficam em `/var/lib/snmp-trap/config.json`, no disco do servidor, e continuam lá quando o container reinicia ou o script de atualização roda de novo. O repositório pode ficar público: a leitura e o download do release não exigem conta. O pacote da imagem no GHCR também precisa estar público, senão o `docker pull` pede login.

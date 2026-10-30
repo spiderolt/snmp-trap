@@ -229,10 +229,14 @@ def make_handler(listener: TrapListener):
                 except OSError:
                     message = f"Não foi possível abrir a porta {proposed.trap_port}."
                     proposed.trap_port = current.trap_port
-            if message == "":
-                message = "Configuração salva."
-            listener.set_config(proposed)
-            save_config(proposed)
+            try:
+                proposed = save_config(proposed)
+            except OSError as exc:
+                message = f"Não foi possível salvar a configuração: {exc}"
+            else:
+                listener.set_config(proposed)
+                if message == "":
+                    message = "Configuração salva."
             body = render(listener, message=message).encode("utf-8")
             self._send(200, body, "text/html; charset=utf-8")
 
@@ -295,8 +299,9 @@ def render(listener: TrapListener, *, message: str = "") -> str:
         <input name="api_host" type="text" placeholder="site.spiderolt.com" autocomplete="off" value="{escape(config.api_host)}">
       </label>
       <label>Token
-        <input name="token" type="password" autocomplete="off" value="{escape(config.token)}">
+        <input name="token" type="password" autocomplete="new-password" value="{escape(config.token)}">
       </label>
+      <p class="hint">O endereço e o token ficam neste servidor e continuam depois de reiniciar ou atualizar. Um campo vazio mantém o valor já salvo.</p>
       <label>Redes de origem
         <textarea name="allowlist" rows="5" spellcheck="false" autocomplete="off">{escape(config.allowlist)}</textarea>
       </label>

@@ -22,6 +22,7 @@ def test_page_uses_the_spiderolt_shell() -> None:
     assert 'name="allowlist"' in html
     assert "10.0.0.0/8" in html
     assert "Um IP ou prefixo por linha." in html
+    assert "continuam depois de reiniciar ou atualizar" in html
     assert 'value="site.spiderolt.com"' in html
     assert "Configuração salva." in html
     assert 'class="note ok"' in html

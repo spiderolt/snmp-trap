@@ -68,12 +68,52 @@ def load_config() -> EdgeConfig:
     )
 
 
-def save_config(config: EdgeConfig) -> None:
+def save_config(config: EdgeConfig) -> EdgeConfig:
+    config = _retain_credentials(config)
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(config.to_dict(), indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
     temporary.replace(path)
+    _fsync_dir(path.parent)
+    return config
+
+
+def _retain_credentials(config: EdgeConfig) -> EdgeConfig:
+    api_host = config.api_host.strip()
+    token = config.token.strip()
+    path = config_path()
+    if path.exists() and (api_host == "" or token == ""):
+        try:
+            previous = load_config()
+        except (OSError, json.JSONDecodeError):
+            previous = None
+        if previous is not None:
+            api_host = api_host or previous.api_host
+            token = token or previous.token
+    return EdgeConfig(
+        trap_port=config.trap_port,
+        api_host=api_host,
+        token=token,
+        allowlist=config.allowlist,
+    )
+
+
+def _fsync_dir(directory: Path) -> None:
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        return
+    finally:
+        os.close(descriptor)
 
 
 def _port(value: object, *, fallback: int) -> int:
