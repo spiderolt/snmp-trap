@@ -82,6 +82,7 @@ def fetch_latest_tag(repository: str, *, timeout: float = 2) -> str:
 
 
 def cached_latest() -> str | None:
+    global _cache
     now = time.monotonic()
     with _lock:
         cached = _cache
@@ -110,7 +111,11 @@ def release_status() -> ReleaseStatus:
     current = current_version()
     if parse_version(current) is None:
         return ReleaseStatus(current=current, latest=None)
-    return ReleaseStatus(current=current, latest=cached_latest())
+    try:
+        latest = cached_latest()
+    except Exception:
+        latest = None
+    return ReleaseStatus(current=current, latest=latest)
 
 
 def confirm_latest(requested: str) -> str:

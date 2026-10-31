@@ -5,7 +5,15 @@ import json
 import pytest
 
 from edge.docker_api import DockerClient, DockerError, old_agent_tags
-from edge.release import UpdateError, confirm_latest, fetch_latest_tag, is_newer, release_status, repo
+from edge.release import (
+    UpdateError,
+    clear_release_cache,
+    confirm_latest,
+    fetch_latest_tag,
+    is_newer,
+    release_status,
+    repo,
+)
 from edge.update import (
     apply_update,
     image_ref,
@@ -49,6 +57,26 @@ def test_image_uses_the_repository_owner(monkeypatch: pytest.MonkeyPatch) -> Non
     assert repo() == "spiderolt/snmp-trap"
     with pytest.raises(UpdateError):
         image_ref("v1")
+
+
+def test_release_status_reads_a_real_version_and_caches_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SNMP_TRAP_VERSION", "v1.0.3")
+    clear_release_cache()
+    calls = {"count": 0}
+
+    def fake_fetch(repository: str, *, timeout: float = 2) -> str:
+        calls["count"] += 1
+        assert repository == "spiderolt/snmp-trap"
+        return "v1.0.3"
+
+    monkeypatch.setattr("edge.release.fetch_latest_tag", fake_fetch)
+    first = release_status()
+    second = release_status()
+    assert first.current == "v1.0.3"
+    assert first.latest == "v1.0.3"
+    assert not first.update_available
+    assert second.latest == "v1.0.3"
+    assert calls["count"] == 1
 
 
 def test_dev_version_does_not_check_github(monkeypatch: pytest.MonkeyPatch) -> None:
