@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -7,6 +8,8 @@ from urllib.parse import parse_qs
 
 from edge.config import DEFAULT_PORT, EdgeConfig, normalize_allowlist, save_config
 from edge.listener import TrapListener
+from edge.release import ReleaseStatus, UpdateError, confirm_latest, current_version, release_status
+from edge.update import read_status, start_update
 
 _STATIC = Path(__file__).resolve().parent / "static"
 _ASSETS = {
@@ -112,7 +115,7 @@ body {
 .note.ok { background: var(--online-soft); color: var(--online); }
 .note.warn { background: var(--warning-soft); color: var(--warning); }
 .note.alert { background: var(--critical-soft); color: var(--critical); }
-form { display: grid; gap: 0.25rem; margin-top: 1rem; }
+form.settings { display: grid; gap: 0.25rem; margin-top: 1rem; }
 label {
   display: grid;
   gap: 0.25rem;
@@ -144,8 +147,6 @@ input:focus, textarea:focus {
   outline: none;
 }
 button {
-  margin-top: 1.25rem;
-  min-height: 44px;
   border: 1px solid var(--accent-strong);
   border-radius: 8px;
   background: var(--accent-strong);
@@ -155,6 +156,69 @@ button {
   cursor: pointer;
 }
 button:hover { filter: brightness(0.96); }
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
+}
+form.settings button[type="submit"] {
+  margin-top: 1.25rem;
+  min-height: 44px;
+}
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  margin-top: 1.25rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.footer p { margin: 0; }
+.footer .available { color: var(--accent); font-weight: 600; }
+.footer button {
+  min-height: 32px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+}
+dialog {
+  width: min(24rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: 0 16px 40px rgb(8 16 28 / 0.18);
+}
+dialog::backdrop { background: rgb(8 16 28 / 0.48); }
+dialog h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  letter-spacing: -0.03em;
+}
+dialog p {
+  margin: 0.75rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+.dialog-actions button {
+  min-height: 40px;
+  padding: 0.4rem 0.8rem;
+}
+a { color: var(--accent); }
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
@@ -191,16 +255,43 @@ def make_handler(listener: TrapListener):
                 self._send(200, asset, "image/png")
                 return
             if path == "/healthz":
-                port = listener.stats.listening_port
-                body = f"ok port={port}\n".encode("utf-8")
-                self._send(200, body, "text/plain; charset=utf-8")
+                self._send(200, health_body(listener), "text/plain; charset=utf-8", no_store=True)
                 return
-            self._send(200, render(listener).encode("utf-8"), "text/html; charset=utf-8")
+            if path == "/update-status":
+                body = json.dumps(read_status(), ensure_ascii=False).encode("utf-8")
+                self._send(200, body, "application/json; charset=utf-8", no_store=True)
+                return
+            self._send(
+                200,
+                render(listener, release=release_status()).encode("utf-8"),
+                "text/html; charset=utf-8",
+                no_store=True,
+            )
 
         def do_POST(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0]
             length = int(self.headers.get("Content-Length", "0") or "0")
+            if length > 8192:
+                self._send(400, b"pedido grande\n", "text/plain; charset=utf-8", no_store=True)
+                return
             raw = self.rfile.read(length).decode("utf-8", errors="replace")
-            form = parse_qs(raw, keep_blank_values=True)
+            if path == "/update":
+                self._update(parse_qs(raw, keep_blank_values=True))
+                return
+            self._save(parse_qs(raw, keep_blank_values=True))
+
+        def _update(self, form: dict[str, list[str]]) -> None:
+            requested = (form.get("version") or [""])[0]
+            try:
+                version = confirm_latest(requested)
+                start_update(version)
+            except UpdateError as exc:
+                body = render(listener, message=str(exc), release=release_status()).encode("utf-8")
+                self._send(200, body, "text/html; charset=utf-8", no_store=True)
+                return
+            self._send(200, render_progress(version).encode("utf-8"), "text/html; charset=utf-8", no_store=True)
+
+        def _save(self, form: dict[str, list[str]]) -> None:
             current = listener.current_config()
             message = ""
             try:
@@ -237,25 +328,33 @@ def make_handler(listener: TrapListener):
                 listener.set_config(proposed)
                 if message == "":
                     message = "Configuração salva."
-            body = render(listener, message=message).encode("utf-8")
-            self._send(200, body, "text/html; charset=utf-8")
+            body = render(listener, message=message, release=release_status()).encode("utf-8")
+            self._send(200, body, "text/html; charset=utf-8", no_store=True)
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             return
 
-        def _send(self, status: int, body: bytes, content_type: str) -> None:
+        def _send(self, status: int, body: bytes, content_type: str, *, no_store: bool = False) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            if no_store:
+                self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
     return Handler
 
 
-def render(listener: TrapListener, *, message: str = "") -> str:
+def health_body(listener: TrapListener) -> bytes:
+    port = listener.stats.listening_port
+    return f"ok port={port} version={current_version()}\n".encode("utf-8")
+
+
+def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus | None = None) -> str:
     config = listener.current_config()
     stats = listener.stats
+    status = release or ReleaseStatus(current=current_version())
     listening = stats.listening_port if stats.listening_port is not None else "fechada"
     notes: list[str] = []
     if stats.last_error:
@@ -266,24 +365,9 @@ def render(listener: TrapListener, *, message: str = "") -> str:
         notes.append(f'<p class="note alert" role="alert">{escape(message)}</p>')
     if config.trap_port == 162:
         notes.append('<p class="note warn">A porta 162 costuma estar com o Zabbix.</p>')
-    return f"""<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SpiderOLT · Agente de traps</title>
-  <style>{_PAGE_STYLE}</style>
-</head>
-<body>
+    return _document(f"""
   <main class="panel">
-    <header class="brand">
-      <img class="logo logo-light" src="/assets/logo.png" alt="" width="64" height="60">
-      <img class="logo logo-dark" src="/assets/logo-dark.png" alt="" width="64" height="60">
-      <div>
-        <strong>Spider<span>OLT</span></strong>
-        <small>Agente de traps</small>
-      </div>
-    </header>
+    {_BRAND}
     <p class="lead">A porta UDP padrão é {DEFAULT_PORT}.</p>
     <dl class="stats">
       <div><dt>Escutando</dt><dd>{escape(str(listening))}</dd></div>
@@ -291,7 +375,7 @@ def render(listener: TrapListener, *, message: str = "") -> str:
       <div><dt>Enviados</dt><dd>{stats.sent}</dd></div>
     </dl>
     {"".join(notes)}
-    <form method="post" action="/">
+    <form class="settings" method="post" action="/">
       <label>Porta UDP
         <input name="trap_port" type="number" min="1" max="65535" required value="{config.trap_port}">
       </label>
@@ -308,10 +392,109 @@ def render(listener: TrapListener, *, message: str = "") -> str:
       <p class="hint">Um IP ou prefixo por linha. O aviso de origem mostra o IP que falta.</p>
       <button type="submit">Salvar</button>
     </form>
+    {_footer(status)}
   </main>
+""")
+
+
+def render_progress(version: str) -> str:
+    safe = escape(version)
+    target = json.dumps(version)
+    return _document(f"""
+  <main class="panel">
+    {_BRAND}
+    <p class="lead" id="update-status" role="status">Atualizando para {safe}. Esta tela volta sozinha.</p>
+    <noscript><p class="hint"><a href="/">Recarregue a página</a> em alguns segundos.</p></noscript>
+  </main>
+  <script>
+    const target = {target};
+    const status = document.getElementById("update-status");
+    let attempts = 0;
+    async function poll() {{
+      attempts += 1;
+      try {{
+        const health = await fetch("/healthz", {{ cache: "no-store" }});
+        if (health.ok) {{
+          const version = (await health.text()).match(/version=(\\S+)/);
+          if (version && version[1] === target) {{
+            location.replace("/");
+            return;
+          }}
+        }}
+        const update = await fetch("/update-status", {{ cache: "no-store" }});
+        if (update.ok) {{
+          const body = await update.json();
+          if (body.state === "failed") {{
+            status.textContent = body.error || "A atualização falhou.";
+            return;
+          }}
+        }}
+      }} catch (error) {{}}
+      if (attempts > 150) {{
+        status.textContent = "A atualização demorou mais do que o esperado. Recarregue a página em instantes.";
+        return;
+      }}
+      setTimeout(poll, 2000);
+    }}
+    poll();
+  </script>
+""")
+
+
+_BRAND = """<header class="brand">
+      <img class="logo logo-light" src="/assets/logo.png" alt="" width="64" height="60">
+      <img class="logo logo-dark" src="/assets/logo-dark.png" alt="" width="64" height="60">
+      <div>
+        <strong>Spider<span>OLT</span></strong>
+        <small>Agente de traps</small>
+      </div>
+    </header>"""
+
+
+def _document(content: str) -> str:
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpiderOLT · Agente de traps</title>
+  <style>{_PAGE_STYLE}</style>
+</head>
+<body>
+{content}
 </body>
 </html>
 """
+
+
+def _footer(status: ReleaseStatus) -> str:
+    current = escape(status.current)
+    if not status.update_available or status.latest is None:
+        return f'<footer class="footer"><p>Versão {current}</p></footer>'
+    latest = escape(status.latest)
+    return f"""<footer class="footer">
+      <p>Versão {current} <span class="available">· {latest} disponível</span></p>
+      <button type="button" id="open-update">Atualizar</button>
+    </footer>
+    <dialog id="update-dialog" aria-labelledby="update-title">
+      <form method="post" action="/update">
+        <h2 id="update-title">Atualizar o agente</h2>
+        <p>A versão {latest} substitui a {current}. O agente reinicia e esta tela volta em seguida.</p>
+        <input type="hidden" name="version" value="{latest}">
+        <div class="dialog-actions">
+          <button type="button" class="secondary" id="cancel-update">Cancelar</button>
+          <button type="submit" id="confirm-update">Confirmar atualização</button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      const updateDialog = document.getElementById("update-dialog");
+      document.getElementById("open-update").addEventListener("click", () => updateDialog.showModal());
+      document.getElementById("cancel-update").addEventListener("click", () => updateDialog.close());
+      updateDialog.querySelector("form").addEventListener("submit", () => {{
+        document.getElementById("confirm-update").disabled = true;
+      }});
+    </script>"""
 
 
 def serve_http(listener: TrapListener, port: int) -> None:

@@ -111,6 +111,8 @@ jobs:
           target: production
           platforms: linux/amd64
           push: true
+          build-args: |
+            SNMP_TRAP_VERSION=${{ needs.validate-version.outputs.version }}
           tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

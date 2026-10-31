@@ -1,5 +1,8 @@
 FROM python:3.12-slim AS production
 
+ARG SNMP_TRAP_VERSION=dev
+ENV SNMP_TRAP_VERSION=${SNMP_TRAP_VERSION}
+
 WORKDIR /app
 COPY src /app
 

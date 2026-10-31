@@ -4,6 +4,7 @@ import threading
 
 from edge.config import config_path, http_port, load_config, save_config
 from edge.listener import TrapListener
+from edge.update import prune_after_successful_update
 from edge.web import serve_http
 from trap_receiver.security import Allowlist
 
@@ -20,6 +21,7 @@ def main() -> None:
         listener.stats.last_error = f"Não foi possível abrir a porta {config.trap_port}: {exc}"
     worker = threading.Thread(target=listener.serve_forever, name="trap-listener", daemon=True)
     worker.start()
+    threading.Thread(target=prune_after_successful_update, name="image-prune", daemon=True).start()
     serve_http(listener, http_port())
 
 

@@ -11,4 +11,8 @@ def test_install_removes_unused_images_after_the_update() -> None:
     assert "--volumes" not in script
     assert "snmp-trap-config:/var/lib/snmp-trap" not in script
     assert "- /var/lib/snmp-trap:/var/lib/snmp-trap" in script
+    assert "/var/run/docker.sock:/var/run/docker.sock" in script
+    assert "- ${DEST}:${DEST}" in script
+    assert "SNMP_TRAP_PROJECT_DIR: ${DEST}" in script
+    assert "SNMP_TRAP_REPO: ${SNMP_TRAP_REPO}" in script
     assert 'STATE_DIR="/var/lib/snmp-trap"' in script

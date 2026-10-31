@@ -52,9 +52,13 @@ services:
     environment:
       SNMP_TRAP_CONFIG_PATH: /var/lib/snmp-trap/config.json
       SNMP_TRAP_HTTP_PORT: "${HTTP_PORT}"
+      SNMP_TRAP_PROJECT_DIR: ${DEST}
+      SNMP_TRAP_REPO: ${SNMP_TRAP_REPO}
       TRAP_ALLOWLIST_CIDRS: \${TRAP_ALLOWLIST_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
       - /var/lib/snmp-trap:/var/lib/snmp-trap
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DEST}:${DEST}
 EOF
 
 cat > "${DEST}/.env" <<EOF
@@ -117,6 +121,7 @@ cat <<EOF
 Agente no ar (${SNMP_TRAP_VERSION}).
 Imagem: ${IMAGE}
 Tela: http://${IP}:${HTTP_PORT}
+A tela mostra a versão. Quando houver uma mais nova, o botão Atualizar pede confirmação e reinicia o agente.
 
 Informe o endereço da API, por exemplo site.spiderolt.com, e o token gerado no SpiderOLT.
 Os dois ficam em /var/lib/snmp-trap/config.json e continuam neste servidor quando o agente reinicia ou atualiza.
