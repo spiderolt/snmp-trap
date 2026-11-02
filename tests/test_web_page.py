@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
@@ -35,11 +35,11 @@ def test_page_uses_the_spiderolt_shell() -> None:
     assert 'class="note ok"' in html
     assert 'id="open-update"' not in html
     assert "Versão " in html
-    assert 'action="/count"' in html
-    assert "Iniciar contagem" in html
-    assert 'action="/reload"' in html
-    assert "Forçar reload" in html
-    assert "para depois de um dia" in html
+    assert "Iniciar contagem" not in html
+    assert 'formaction="/reload"' in html
+    assert "Reiniciar instância" in html
+    assert html.index(">Salvar<") < html.index("Reiniciar instância")
+    assert "A contagem zera todo dia à meia-noite." in html
     assert "Nenhum trap desde que o agente subiu." in html
 
 
@@ -131,62 +131,20 @@ def test_rejected_update_keeps_the_form(monkeypatch) -> None:
     assert 'name="token"' in html
 
 
-def test_counter_starts_at_zero_and_resets_after_a_day() -> None:
+def test_counter_resets_at_midnight_in_sao_paulo() -> None:
     stats = EdgeStats()
-    started = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
-    stats.record_received(started)
-    stats.record_sent(started)
-    assert stats.received == 0
-    assert stats.sent == 0
-    assert stats.last_received_at == started
-
-    stats.start_counting(started)
-    stats.record_received(started + timedelta(hours=1))
-    stats.record_sent(started + timedelta(hours=1))
-    assert stats.received == 1
+    evening = datetime(2026, 11, 2, 2, 30, tzinfo=timezone.utc)
+    stats.record_received(evening)
+    stats.record_sent(evening)
+    stats.record_received(evening.replace(minute=40))
+    assert stats.received == 2
     assert stats.sent == 1
 
-    stats.record_received(started + timedelta(days=1))
-    assert stats.counting is False
-    assert stats.received == 0
+    after_midnight = datetime(2026, 11, 2, 3, 5, tzinfo=timezone.utc)
+    stats.record_received(after_midnight)
+    assert stats.received == 1
     assert stats.sent == 0
-
-
-def test_render_stops_a_count_after_one_day() -> None:
-    listener = TrapListener(allowlist=Allowlist())
-    listener.stats.start_counting(datetime.now(timezone.utc) - timedelta(days=1, seconds=1))
-    listener.stats.received = 12
-    listener.stats.sent = 3
-
-    html = render(listener)
-
-    assert listener.stats.counting is False
-    assert "Iniciar contagem" in html
-    assert "<dd>0</dd>" in html
-    assert "Contando desde" not in html
-
-
-def test_count_button_resets_and_starts(monkeypatch) -> None:
-    monkeypatch.setattr("edge.web.release_status", lambda: ReleaseStatus(current="v1.0.4"))
-    listener = TrapListener(allowlist=Allowlist())
-    listener.stats.received = 40
-    listener.stats.sent = 10
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(listener))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        port = server.server_address[1]
-        request = Request(f"http://127.0.0.1:{port}/count", data=b"", method="POST")
-        with urlopen(request, timeout=5) as response:
-            html = response.read().decode("utf-8")
-    finally:
-        server.shutdown()
-        server.server_close()
-    assert listener.stats.counting is True
-    assert listener.stats.received == 0
-    assert "Contagem iniciada." in html
-    assert "Reiniciar contagem" in html
-    assert "Contando desde" in html
+    assert stats.view(after_midnight.replace(minute=10)) == (1, 0, after_midnight)
 
 
 def test_reload_reopens_the_udp_port(monkeypatch) -> None:
@@ -215,7 +173,7 @@ def test_reload_reopens_the_udp_port(monkeypatch) -> None:
         server.server_close()
     assert opened == [1162]
     assert listener.stats.last_error == ""
-    assert "Escuta recarregada." in html
+    assert "Instância reiniciada." in html
     assert 'class="note ok"' in html
 
 

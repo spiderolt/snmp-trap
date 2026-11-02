@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import socket
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from edge.config import EdgeConfig
 from edge.payload import event_payload
@@ -14,61 +15,52 @@ from trap_receiver.decoder import TrapDecodeError, decode_snmp_trap
 from trap_receiver.security import Allowlist, SlidingWindowRateLimiter, parse_allowlist, parse_csv
 
 
+def _local_day(now: datetime) -> date:
+    try:
+        zone = ZoneInfo("America/Sao_Paulo")
+    except Exception:
+        zone = timezone.utc
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(zone).date()
+
+
 class EdgeStats:
     def __init__(self) -> None:
         self.received = 0
         self.sent = 0
         self.last_error = ""
         self.listening_port: int | None = None
-        self.counting = False
-        self.counting_started_at: datetime | None = None
+        self.counted_on: date | None = None
         self.last_received_at: datetime | None = None
         self._lock = threading.Lock()
 
-    def view(self) -> tuple[int, int, bool, datetime | None, datetime | None]:
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            self._expire_locked(now)
-            return (
-                self.received,
-                self.sent,
-                self.counting,
-                self.counting_started_at,
-                self.last_received_at,
-            )
-
-    def start_counting(self, now: datetime | None = None) -> None:
+    def view(self, now: datetime | None = None) -> tuple[int, int, datetime | None]:
         now = now or datetime.now(timezone.utc)
         with self._lock:
-            self.received = 0
-            self.sent = 0
-            self.counting = True
-            self.counting_started_at = now
+            self._roll_locked(now)
+            return self.received, self.sent, self.last_received_at
 
     def record_received(self, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
         with self._lock:
             self.last_received_at = now
-            self._expire_locked(now)
-            if self.counting:
-                self.received += 1
+            self._roll_locked(now)
+            self.received += 1
 
     def record_sent(self, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
         with self._lock:
-            self._expire_locked(now)
-            if self.counting:
-                self.sent += 1
+            self._roll_locked(now)
+            self.sent += 1
 
-    def _expire_locked(self, now: datetime) -> None:
-        started = self.counting_started_at
-        if not self.counting or started is None:
+    def _roll_locked(self, now: datetime) -> None:
+        day = _local_day(now)
+        if self.counted_on == day:
             return
-        if now - started >= timedelta(days=1):
-            self.received = 0
-            self.sent = 0
-            self.counting = False
-            self.counting_started_at = None
+        self.received = 0
+        self.sent = 0
+        self.counted_on = day
 
 
 class TrapListener:

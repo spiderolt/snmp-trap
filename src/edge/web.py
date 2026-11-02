@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -171,16 +171,8 @@ button.secondary {
   color: var(--text);
   border-color: var(--border-strong);
 }
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-}
-.actions form { margin: 0; }
-.actions button {
-  min-height: 40px;
-  padding: 0.4rem 0.8rem;
+form.settings button.secondary {
+  margin-top: 0.5rem;
 }
 .footer {
   display: flex;
@@ -291,9 +283,6 @@ def make_handler(listener: TrapListener):
             if path == "/update":
                 self._update(parse_qs(raw, keep_blank_values=True))
                 return
-            if path == "/count":
-                self._count()
-                return
             if path == "/reload":
                 self._reload()
                 return
@@ -310,14 +299,9 @@ def make_handler(listener: TrapListener):
                 return
             self._send(200, render_progress(version).encode("utf-8"), "text/html; charset=utf-8", no_store=True)
 
-        def _count(self) -> None:
-            listener.stats.start_counting()
-            body = render(listener, message="Contagem iniciada.", release=release_status()).encode("utf-8")
-            self._send(200, body, "text/html; charset=utf-8", no_store=True)
-
         def _reload(self) -> None:
             error = listener.reload_listener()
-            message = error or "Escuta recarregada."
+            message = error or "Instância reiniciada."
             body = render(listener, message=message, release=release_status()).encode("utf-8")
             self._send(200, body, "text/html; charset=utf-8", no_store=True)
 
@@ -381,7 +365,7 @@ def health_body(listener: TrapListener) -> bytes:
     return f"ok port={port} version={current_version()}\n".encode("utf-8")
 
 
-_OK_MESSAGES = {"Configuração salva.", "Contagem iniciada.", "Escuta recarregada."}
+_OK_MESSAGES = {"Configuração salva.", "Instância reiniciada."}
 
 
 def _clock(moment: datetime) -> str:
@@ -390,13 +374,6 @@ def _clock(moment: datetime) -> str:
     except Exception:
         zoned = moment.astimezone(timezone.utc)
     return zoned.strftime("%d/%m/%Y %H:%M")
-
-
-def _count_status(counting: bool, started: datetime | None) -> str:
-    if not counting or started is None:
-        return '<p class="hint">A contagem começa em zero quando você pede e para depois de um dia.</p>'
-    end = started + timedelta(days=1)
-    return f'<p class="hint">Contando desde {_clock(started)}. Zera e para às {_clock(end)}.</p>'
 
 
 def _last_trap(moment: datetime | None) -> str:
@@ -408,10 +385,9 @@ def _last_trap(moment: datetime | None) -> str:
 def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus | None = None) -> str:
     config = listener.current_config()
     stats = listener.stats
-    received, sent, counting, started, last_received = stats.view()
+    received, sent, last_received = stats.view()
     status = release or ReleaseStatus(current=current_version())
     listening = stats.listening_port if stats.listening_port is not None else "fechada"
-    count_label = "Reiniciar contagem" if counting else "Iniciar contagem"
     notes: list[str] = []
     if stats.last_error:
         notes.append(f'<p class="note alert" role="alert">{escape(stats.last_error)}</p>')
@@ -430,17 +406,9 @@ def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus 
       <div><dt>Recebidos</dt><dd>{received}</dd></div>
       <div><dt>Enviados</dt><dd>{sent}</dd></div>
     </dl>
-    {_count_status(counting, started)}
+    <p class="hint">A contagem zera todo dia à meia-noite.</p>
     {_last_trap(last_received)}
     {"".join(notes)}
-    <div class="actions">
-      <form method="post" action="/count">
-        <button type="submit">{count_label}</button>
-      </form>
-      <form method="post" action="/reload">
-        <button type="submit" class="secondary">Forçar reload</button>
-      </form>
-    </div>
     <form class="settings" method="post" action="/">
       <label>Porta UDP
         <input name="trap_port" type="number" min="1" max="65535" required value="{config.trap_port}">
@@ -456,6 +424,7 @@ def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus 
       </label>
       <p class="hint">Um IP ou prefixo por linha. O aviso de origem mostra o IP que falta.</p>
       <button type="submit">Salvar</button>
+      <button type="submit" class="secondary" formaction="/reload">Reiniciar instância</button>
     </form>
     {_footer(status)}
   </main>
