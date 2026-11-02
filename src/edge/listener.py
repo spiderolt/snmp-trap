@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from edge.config import EdgeConfig
 from edge.payload import event_payload
@@ -20,6 +20,55 @@ class EdgeStats:
         self.sent = 0
         self.last_error = ""
         self.listening_port: int | None = None
+        self.counting = False
+        self.counting_started_at: datetime | None = None
+        self.last_received_at: datetime | None = None
+        self._lock = threading.Lock()
+
+    def view(self) -> tuple[int, int, bool, datetime | None, datetime | None]:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            self._expire_locked(now)
+            return (
+                self.received,
+                self.sent,
+                self.counting,
+                self.counting_started_at,
+                self.last_received_at,
+            )
+
+    def start_counting(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            self.received = 0
+            self.sent = 0
+            self.counting = True
+            self.counting_started_at = now
+
+    def record_received(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            self.last_received_at = now
+            self._expire_locked(now)
+            if self.counting:
+                self.received += 1
+
+    def record_sent(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            self._expire_locked(now)
+            if self.counting:
+                self.sent += 1
+
+    def _expire_locked(self, now: datetime) -> None:
+        started = self.counting_started_at
+        if not self.counting or started is None:
+            return
+        if now - started >= timedelta(days=1):
+            self.received = 0
+            self.sent = 0
+            self.counting = False
+            self.counting_started_at = None
 
 
 class TrapListener:
@@ -30,6 +79,7 @@ class TrapListener:
         self.registry = default_registry()
         self.stats = EdgeStats()
         self._socket: socket.socket | None = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._config_lock = threading.Lock()
@@ -81,7 +131,34 @@ class TrapListener:
                 if self._stop.is_set():
                     break
                 continue
-            self._handle(payload, address[0])
+            try:
+                self._handle(payload, address[0])
+            except Exception:
+                self.stats.last_error = "Falha ao processar o trap."
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self.serve_forever,
+                name="trap-listener",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def reload_listener(self) -> str:
+        port = self.current_config().trap_port
+        self.start()
+        try:
+            self.bind(port)
+        except OSError as exc:
+            message = f"Não foi possível abrir a porta {port}: {exc}"
+            self.stats.last_error = message
+            return message
+        self.stats.last_error = ""
+        return ""
 
     def stop(self) -> None:
         self._stop.set()
@@ -92,7 +169,7 @@ class TrapListener:
             sock.close()
 
     def _handle(self, payload: bytes, source_ip: str) -> None:
-        self.stats.received += 1
+        self.stats.record_received()
         if len(payload) > self.max_payload_bytes:
             self.stats.last_error = "Trap maior que o limite."
             return
@@ -141,7 +218,7 @@ class TrapListener:
         except PublishError as exc:
             self.stats.last_error = str(exc)
             return
-        self.stats.sent += 1
+        self.stats.record_sent()
         self.stats.last_error = ""
 
 

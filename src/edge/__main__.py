@@ -19,8 +19,7 @@ def main() -> None:
         listener.bind(config.trap_port)
     except OSError as exc:
         listener.stats.last_error = f"Não foi possível abrir a porta {config.trap_port}: {exc}"
-    worker = threading.Thread(target=listener.serve_forever, name="trap-listener", daemon=True)
-    worker.start()
+    listener.start()
     threading.Thread(target=prune_after_successful_update, name="image-prune", daemon=True).start()
     serve_http(listener, http_port())
 

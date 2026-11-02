@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 
 from edge.config import DEFAULT_PORT, EdgeConfig, normalize_allowlist, save_config
 from edge.listener import TrapListener
@@ -169,6 +171,17 @@ button.secondary {
   color: var(--text);
   border-color: var(--border-strong);
 }
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.actions form { margin: 0; }
+.actions button {
+  min-height: 40px;
+  padding: 0.4rem 0.8rem;
+}
 .footer {
   display: flex;
   flex-wrap: wrap;
@@ -278,6 +291,12 @@ def make_handler(listener: TrapListener):
             if path == "/update":
                 self._update(parse_qs(raw, keep_blank_values=True))
                 return
+            if path == "/count":
+                self._count()
+                return
+            if path == "/reload":
+                self._reload()
+                return
             self._save(parse_qs(raw, keep_blank_values=True))
 
         def _update(self, form: dict[str, list[str]]) -> None:
@@ -290,6 +309,17 @@ def make_handler(listener: TrapListener):
                 self._send(200, body, "text/html; charset=utf-8", no_store=True)
                 return
             self._send(200, render_progress(version).encode("utf-8"), "text/html; charset=utf-8", no_store=True)
+
+        def _count(self) -> None:
+            listener.stats.start_counting()
+            body = render(listener, message="Contagem iniciada.", release=release_status()).encode("utf-8")
+            self._send(200, body, "text/html; charset=utf-8", no_store=True)
+
+        def _reload(self) -> None:
+            error = listener.reload_listener()
+            message = error or "Escuta recarregada."
+            body = render(listener, message=message, release=release_status()).encode("utf-8")
+            self._send(200, body, "text/html; charset=utf-8", no_store=True)
 
         def _save(self, form: dict[str, list[str]]) -> None:
             current = listener.current_config()
@@ -351,15 +381,41 @@ def health_body(listener: TrapListener) -> bytes:
     return f"ok port={port} version={current_version()}\n".encode("utf-8")
 
 
+_OK_MESSAGES = {"Configuração salva.", "Contagem iniciada.", "Escuta recarregada."}
+
+
+def _clock(moment: datetime) -> str:
+    try:
+        zoned = moment.astimezone(ZoneInfo("America/Sao_Paulo"))
+    except Exception:
+        zoned = moment.astimezone(timezone.utc)
+    return zoned.strftime("%d/%m/%Y %H:%M")
+
+
+def _count_status(counting: bool, started: datetime | None) -> str:
+    if not counting or started is None:
+        return '<p class="hint">A contagem começa em zero quando você pede e para depois de um dia.</p>'
+    end = started + timedelta(days=1)
+    return f'<p class="hint">Contando desde {_clock(started)}. Zera e para às {_clock(end)}.</p>'
+
+
+def _last_trap(moment: datetime | None) -> str:
+    if moment is None:
+        return '<p class="hint">Nenhum trap desde que o agente subiu.</p>'
+    return f'<p class="hint">Último trap em {_clock(moment)}.</p>'
+
+
 def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus | None = None) -> str:
     config = listener.current_config()
     stats = listener.stats
+    received, sent, counting, started, last_received = stats.view()
     status = release or ReleaseStatus(current=current_version())
     listening = stats.listening_port if stats.listening_port is not None else "fechada"
+    count_label = "Reiniciar contagem" if counting else "Iniciar contagem"
     notes: list[str] = []
     if stats.last_error:
         notes.append(f'<p class="note alert" role="alert">{escape(stats.last_error)}</p>')
-    if message == "Configuração salva.":
+    if message in _OK_MESSAGES:
         notes.append(f'<p class="note ok" role="status">{escape(message)}</p>')
     elif message:
         notes.append(f'<p class="note alert" role="alert">{escape(message)}</p>')
@@ -371,10 +427,20 @@ def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus 
     <p class="lead">A porta UDP padrão é {DEFAULT_PORT}.</p>
     <dl class="stats">
       <div><dt>Escutando</dt><dd>{escape(str(listening))}</dd></div>
-      <div><dt>Recebidos</dt><dd>{stats.received}</dd></div>
-      <div><dt>Enviados</dt><dd>{stats.sent}</dd></div>
+      <div><dt>Recebidos</dt><dd>{received}</dd></div>
+      <div><dt>Enviados</dt><dd>{sent}</dd></div>
     </dl>
+    {_count_status(counting, started)}
+    {_last_trap(last_received)}
     {"".join(notes)}
+    <div class="actions">
+      <form method="post" action="/count">
+        <button type="submit">{count_label}</button>
+      </form>
+      <form method="post" action="/reload">
+        <button type="submit" class="secondary">Forçar reload</button>
+      </form>
+    </div>
     <form class="settings" method="post" action="/">
       <label>Porta UDP
         <input name="trap_port" type="number" min="1" max="65535" required value="{config.trap_port}">
@@ -385,7 +451,6 @@ def render(listener: TrapListener, *, message: str = "", release: ReleaseStatus 
       <label>Token
         <input name="token" type="password" autocomplete="new-password" value="{escape(config.token)}">
       </label>
-      <p class="hint">O endereço e o token ficam neste servidor e continuam depois de reiniciar ou atualizar. Um campo vazio mantém o valor já salvo.</p>
       <label>Redes de origem
         <textarea name="allowlist" rows="5" spellcheck="false" autocomplete="off">{escape(config.allowlist)}</textarea>
       </label>
@@ -410,6 +475,15 @@ def render_progress(version: str) -> str:
     const target = {target};
     const status = document.getElementById("update-status");
     let attempts = 0;
+    function showReload(text) {{
+      status.textContent = text;
+      const reload = document.createElement("button");
+      reload.type = "button";
+      reload.className = "secondary";
+      reload.textContent = "Recarregar";
+      reload.addEventListener("click", () => location.replace("/"));
+      status.insertAdjacentElement("afterend", reload);
+    }}
     async function poll() {{
       attempts += 1;
       try {{
@@ -425,13 +499,13 @@ def render_progress(version: str) -> str:
         if (update.ok) {{
           const body = await update.json();
           if (body.state === "failed") {{
-            status.textContent = body.error || "A atualização falhou.";
+            showReload(body.error || "A atualização falhou.");
             return;
           }}
         }}
       }} catch (error) {{}}
       if (attempts > 150) {{
-        status.textContent = "A atualização demorou mais do que o esperado. Recarregue a página em instantes.";
+        showReload("A atualização demorou mais do que o esperado.");
         return;
       }}
       setTimeout(poll, 2000);
