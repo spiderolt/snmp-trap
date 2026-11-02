@@ -28,6 +28,16 @@ class DockerClient:
             raise DockerError("resposta inválida do Docker")
         return payload
 
+    def list_containers(self) -> list[dict[str, object]]:
+        query = urlencode({"all": "1"})
+        status, body = self._request("GET", f"/v1.41/containers/json?{query}")
+        if status != 200:
+            raise DockerError(_message(body) or "não foi possível listar os containers")
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, list):
+            raise DockerError("resposta inválida do Docker")
+        return [item for item in payload if isinstance(item, dict)]
+
     def find_named(self, name: str) -> dict[str, object] | None:
         query = urlencode({"all": "1", "filters": json.dumps({"name": [name]})})
         status, body = self._request("GET", f"/v1.41/containers/json?{query}")

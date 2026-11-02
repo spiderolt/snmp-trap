@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -192,15 +193,75 @@ def bind_destination(bind: str) -> str:
     return ""
 
 
-def service_container_id() -> str:
+_CONTAINER_MARKERS = (
+    re.compile(r"/containers/([0-9a-f]{64})/"),
+    re.compile(r"docker-([0-9a-f]{64})\.scope"),
+    re.compile(r"libpod-([0-9a-f]{64})\.scope"),
+)
+_HEX_HOSTNAME = re.compile(r"^[0-9a-f]{12,64}$")
+
+
+def container_id_from_runtime(mountinfo: str, cgroup: str, hostname: str) -> str:
+    for text in (mountinfo, cgroup):
+        for pattern in _CONTAINER_MARKERS:
+            found = pattern.search(text)
+            if found:
+                return found.group(1)
+    if _HEX_HOSTNAME.fullmatch(hostname.strip().lower()):
+        return hostname.strip().lower()
+    return ""
+
+
+def _read_runtime_file(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def agent_container_id(containers: list[object]) -> str:
+    matches: list[str] = []
+    for item in containers:
+        if not isinstance(item, dict) or str(item.get("State") or "") != "running":
+            continue
+        names = [str(name).lstrip("/") for name in (item.get("Names") or []) if isinstance(name, str)]
+        if JOB_NAME in names:
+            continue
+        image_name = str(item.get("Image") or "").rsplit("/", 1)[-1]
+        labels = item.get("Labels") if isinstance(item.get("Labels"), dict) else {}
+        service = str(labels.get("com.docker.compose.service") or "")
+        if service != "snmp-trap" and not image_name.startswith(("snmp-trap:", "snmp-trap@")):
+            continue
+        container_id = str(item.get("Id") or "")
+        if container_id:
+            matches.append(container_id)
+    if len(matches) > 1:
+        raise UpdateError("Há mais de um container deste agente em execução.")
+    if len(matches) == 1:
+        return matches[0]
+    return ""
+
+
+def service_container_id(client: DockerClient | None = None) -> str:
     configured = os.environ.get("SNMP_TRAP_CONTAINER_ID", "").strip()
     if configured:
         return configured
-    hostname = Path("/etc/hostname")
-    if hostname.is_file():
-        value = hostname.read_text(encoding="utf-8").strip()
-        if value:
-            return value
+    candidate = container_id_from_runtime(
+        _read_runtime_file("/proc/self/mountinfo"),
+        _read_runtime_file("/proc/self/cgroup"),
+        _read_runtime_file("/etc/hostname"),
+    )
+    if candidate and client is not None:
+        try:
+            client.inspect(candidate)
+        except DockerError:
+            candidate = ""
+    if candidate:
+        return candidate
+    if client is not None:
+        found = agent_container_id(client.list_containers())
+        if found:
+            return found
     raise UpdateError("Não identifiquei o container deste agente.")
 
 
@@ -208,13 +269,13 @@ def start_update(version: str, *, client: DockerClient | None = None, service_id
     if parse_version(version) is None:
         raise UpdateError("Versão inválida.")
     project_dir()
-    service_id = service_id or service_container_id()
     docker = client or DockerClient()
     if not Path(docker.socket_path).exists():
         raise UpdateError(
             "Não encontrei o Docker neste agente. "
             "Rode o script de instalação mais uma vez; depois disso a atualização fica nesta tela."
         )
+    service_id = service_id or service_container_id(docker)
     with _update_lock:
         try:
             spec = docker.inspect(service_id)

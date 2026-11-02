@@ -15,7 +15,9 @@ from edge.release import (
     repo,
 )
 from edge.update import (
+    agent_container_id,
     apply_update,
+    container_id_from_runtime,
     image_ref,
     prune_after_successful_update,
     read_image_env,
@@ -23,6 +25,7 @@ from edge.update import (
     replace_service,
     replacement_body,
     rewrite_image_env,
+    service_container_id,
     start_update,
     updater_binds,
 )
@@ -176,6 +179,88 @@ def test_replace_removes_the_stopped_container() -> None:
     replace_service(docker, "old", "ghcr.io/spiderolt/snmp-trap:v1.0.2")
     assert docker.calls[-2:] == ["start:new", "remove:old"]
     assert docker.body["Image"] == "ghcr.io/spiderolt/snmp-trap:v1.0.2"
+
+
+def test_container_id_ignores_a_machine_hostname() -> None:
+    container_id = "ab" * 32
+    assert container_id_from_runtime("", "", "noc") == ""
+    mountinfo = f"/var/lib/docker/containers/{container_id}/hostname /etc/hostname"
+    assert container_id_from_runtime(mountinfo, "", "noc") == container_id
+    cgroup = f"0::/system.slice/docker-{container_id}.scope\n"
+    assert container_id_from_runtime("", cgroup, "noc") == container_id
+    assert container_id_from_runtime("", "", "abc123def456") == "abc123def456"
+
+
+def test_agent_container_id_follows_the_running_image() -> None:
+    container_id = "cd" * 32
+    found = agent_container_id(
+        [
+            {
+                "Id": "11" * 32,
+                "State": "running",
+                "Names": ["/zabbix"],
+                "Image": "zabbix/zabbix-server:latest",
+                "Labels": {},
+            },
+            {
+                "Id": container_id,
+                "State": "running",
+                "Names": ["/qualquer-nome"],
+                "Image": "ghcr.io/spiderolt/snmp-trap:v1.0.5",
+                "Labels": {},
+            },
+            {
+                "Id": "22" * 32,
+                "State": "exited",
+                "Names": ["/antigo"],
+                "Image": "ghcr.io/spiderolt/snmp-trap:v1.0.4",
+                "Labels": {},
+            },
+            {
+                "Id": "33" * 32,
+                "State": "running",
+                "Names": ["/snmp-trap-update"],
+                "Image": "ghcr.io/spiderolt/snmp-trap:v1.0.5",
+                "Labels": {},
+            },
+        ]
+    )
+    assert found == container_id
+
+
+def test_agent_container_id_refuses_two_running_copies() -> None:
+    rows = [
+        {"Id": "aa" * 32, "State": "running", "Names": ["/a"], "Image": "ghcr.io/x/snmp-trap:v1", "Labels": {}},
+        {"Id": "bb" * 32, "State": "running", "Names": ["/b"], "Image": "ghcr.io/x/snmp-trap:v1", "Labels": {}},
+    ]
+    with pytest.raises(UpdateError, match="mais de um"):
+        agent_container_id(rows)
+
+
+def test_service_container_id_does_not_use_the_machine_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SNMP_TRAP_CONTAINER_ID", raising=False)
+    monkeypatch.setattr(
+        "edge.update._read_runtime_file",
+        lambda path: "noc\n" if path.endswith("hostname") else "",
+    )
+    container_id = "ef" * 32
+
+    class Client:
+        def inspect(self, container_id: str) -> dict[str, object]:
+            raise DockerError(f"No such container: {container_id}")
+
+        def list_containers(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "Id": container_id,
+                    "State": "running",
+                    "Names": ["/noc"],
+                    "Image": "local/other:1",
+                    "Labels": {"com.docker.compose.service": "snmp-trap"},
+                }
+            ]
+
+    assert service_container_id(Client()) == container_id
 
 
 def test_start_update_launches_one_job(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
