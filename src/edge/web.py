@@ -18,6 +18,58 @@ _ASSETS = {
     "/assets/logo.png": (_STATIC / "logo.png").read_bytes(),
     "/assets/logo-dark.png": (_STATIC / "logo-dark.png").read_bytes(),
 }
+_ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet"
+_ROBOTS_TXT = b"""User-agent: *
+Allow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Claude-SearchBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: Perplexity-User
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+
+User-agent: cohere-ai
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+"""
 
 _PAGE_STYLE = """
 :root {
@@ -262,6 +314,9 @@ def make_handler(listener: TrapListener):
             if path == "/healthz":
                 self._send(200, health_body(listener), "text/plain; charset=utf-8", no_store=True)
                 return
+            if path == "/robots.txt":
+                self._send(200, _ROBOTS_TXT, "text/plain; charset=utf-8", no_store=True)
+                return
             if path == "/update-status":
                 body = json.dumps(read_status(), ensure_ascii=False).encode("utf-8")
                 self._send(200, body, "application/json; charset=utf-8", no_store=True)
@@ -352,6 +407,7 @@ def make_handler(listener: TrapListener):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Robots-Tag", _ROBOTS_TAG)
             if no_store:
                 self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -500,6 +556,7 @@ def _document(content: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
   <title>SpiderOLT · Agente de traps</title>
   <style>{_PAGE_STYLE}</style>
 </head>

@@ -21,6 +21,7 @@ def test_page_uses_the_spiderolt_shell() -> None:
 
     html = render(listener, message="Configuração salva.")
 
+    assert 'name="robots" content="noindex, nofollow, noarchive, nosnippet"' in html
     assert "Spider<span>OLT</span>" in html
     assert 'src="/assets/logo.png"' in html
     assert 'src="/assets/logo-dark.png"' in html
@@ -175,6 +176,28 @@ def test_reload_reopens_the_udp_port(monkeypatch) -> None:
     assert listener.stats.last_error == ""
     assert "Instância reiniciada." in html
     assert 'class="note ok"' in html
+
+
+def test_robots_txt_refuses_ai_crawlers() -> None:
+    listener = TrapListener(allowlist=Allowlist())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(listener))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        with urlopen(f"http://127.0.0.1:{port}/robots.txt", timeout=5) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"] == "text/plain; charset=utf-8"
+            assert response.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive, nosnippet"
+            policy = response.read().decode("utf-8")
+        with urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+            assert response.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive, nosnippet"
+            response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert "User-agent: *\nAllow: /" in policy
+    assert "User-agent: GPTBot\nDisallow: /" in policy
 
 
 def test_a_bad_trap_does_not_stop_the_listener() -> None:
