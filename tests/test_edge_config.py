@@ -33,7 +33,7 @@ def test_config_roundtrip(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_allowlist_accepts_a_host_and_rejects_text() -> None:
-    assert parse_allowlist("10.0.0.0/8\n45.7.152.13\n10.0.0.0/8") == ["10.0.0.0/8", "45.7.152.13/32"]
+    assert parse_allowlist("10.0.0.0/8\n203.0.113.10\n10.0.0.0/8") == ["10.0.0.0/8", "203.0.113.10/32"]
     with pytest.raises(ValueError, match="Rede inválida"):
         parse_allowlist("olt")
     with pytest.raises(ValueError, match="ao menos uma rede"):
